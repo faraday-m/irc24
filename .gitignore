@@ -34,4 +34,4 @@ build/
 .vscode/
 
 ### Mac OS ###
-.DS_Store
+.DS_Storedependency-reduced-pom.xml
