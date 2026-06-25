@@ -1,6 +1,13 @@
 # irc24
 
-IRC client library for Java 24 with virtual threads.
+IRC client library for Java 24 with virtual threads, and a TUI client built on top of it.
+
+## Modules
+
+| Module | Description |
+|--------|-------------|
+| `irc24-lib` | Core library — no UI dependencies |
+| `irc24-tui` | Terminal UI client (Lanterna), depends on `irc24-lib` |
 
 ## Features
 
@@ -20,7 +27,57 @@ IRC client library for Java 24 with virtual threads.
 - Java 24+
 - Maven
 
-## Quick start
+---
+
+## TUI client
+
+Three-column terminal interface: channel list · messages · user list.
+
+### Run
+
+```bash
+# Build fat JAR (includes all dependencies)
+mvn package -DskipTests
+
+# Launch (defaults: irc.libera.chat:6697 TLS, nick=irc24bot, channel=#libera)
+java -jar irc24-tui/target/irc24-tui-1.0-SNAPSHOT-fat.jar
+
+# With options
+java -jar irc24-tui/target/irc24-tui-1.0-SNAPSHOT-fat.jar \
+  --host irc.libera.chat --port 6697 --nick mynick --channel "#libera"
+
+# Plain TCP
+java -jar irc24-tui/target/irc24-tui-1.0-SNAPSHOT-fat.jar --no-tls --port 6667
+```
+
+> **Note:** run via `java -jar`, not `mvn exec:java` — Maven redirects stdin and breaks terminal raw mode.
+
+### Key bindings
+
+| Key | Action |
+|-----|--------|
+| Enter | Send message / execute command |
+| Escape | Quit |
+| PageUp / ↑ | Scroll messages up (older) |
+| PageDown / ↓ | Scroll messages down (newer) |
+| Tab | Next channel |
+| Shift+Tab | Previous channel |
+
+### Slash commands
+
+| Command | Description |
+|---------|-------------|
+| `/join #channel` | Join a channel (auto-switches to it) |
+| `/part [#channel]` | Leave current or named channel |
+| `/nick <newnick>` | Change nickname |
+| `/msg <target> <text>` | Send a private message |
+| `/switch #channel` | Switch active channel without rejoining |
+| `/quit` | Disconnect and exit |
+| `/help` | Show command reference |
+
+---
+
+## Library quick start
 
 ```java
 IrcClientConfig config = IrcClientConfig.of("irc.libera.chat", 6697, "mynick")
@@ -33,6 +90,16 @@ client.addHandler(msg -> System.out.println(msg.prefix() + " " + msg.command() +
 client.start(); // blocks until 001 RPL_WELCOME
 
 client.commands().join("#java");
+```
+
+### Maven dependency (after `mvn install`)
+
+```xml
+<dependency>
+    <groupId>com.faradaym</groupId>
+    <artifactId>irc24-lib</artifactId>
+    <version>1.0-SNAPSHOT</version>
+</dependency>
 ```
 
 ## Configuration
@@ -54,7 +121,6 @@ client.commands().join("#java");
 ## Handlers
 
 ```java
-// Add a handler — receives all non-internal IRC messages
 client.addHandler(msg -> {
     if ("PRIVMSG".equals(msg.command())) {
         System.out.println("<" + msg.prefix() + "> " + msg.trailing());
@@ -74,20 +140,23 @@ users.thenAccept(nicks -> System.out.println("Users: " + nicks));
 ## Package structure
 
 ```
-com.faradaym.irc24
+irc24-lib/src/main/java/com/faradaym/irc24/
 ├── protocol/       IrcCommand, IrcReply, IrcMessages, MessageTooLongException
 ├── parser/         IrcMessageParser, IrcMessage
 ├── connection/     IrcConnection
-└── client/         IrcClient, IrcClientConfig, IrcSession, IrcCommandSender,
-                    ReconnectStrategy
-    └── handler/    IrcEventHandler, InternalHandler, IrcInternalHandlers,
-                    CircuitBreaker, PendingNames
+└── client/         IrcClient, IrcClientConfig, IrcSession, IrcCommandSender, ReconnectStrategy
+    └── handler/    IrcEventHandler, InternalHandler, IrcInternalHandlers, CircuitBreaker, PendingNames
+
+irc24-tui/src/main/java/com/faradaym/irc24/tui/
+    IrcTui, TuiState, TuiRenderer, TuiMain
 ```
 
 ## Running tests
 
 ```bash
 mvn test
+# or only the library tests
+mvn test -pl irc24-lib
 ```
 
 Tests use a loopback `FakeServer` (real `ServerSocket`) — no external network required.
