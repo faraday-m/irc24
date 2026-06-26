@@ -16,11 +16,6 @@ import java.io.IOException;
  */
 class IrcCommandSender implements IrcSession {
 
-    @FunctionalInterface
-    interface LineWriter {
-        void writeLine(String line) throws IOException;
-    }
-
     private final LineWriter writer;
 
     IrcCommandSender(LineWriter writer) {

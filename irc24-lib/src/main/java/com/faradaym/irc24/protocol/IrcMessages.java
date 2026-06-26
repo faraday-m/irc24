@@ -32,12 +32,12 @@ public final class IrcMessages {
     }
 
     public static String nick(String nick) {
-        requireParam("nick", nick);
+        requireToken("nick", nick);
         return build(IrcCommand.NICK + " " + nick);
     }
 
     public static String user(String username, String realName) {
-        requireParam("username", username);
+        requireToken("username", username);
         requireParam("realName", realName);
         // RFC 1459: USER <username> <hostname> <servername> :<realname>
         // hostname and servername are ignored by the server — use placeholders
@@ -93,42 +93,42 @@ public final class IrcMessages {
     // -----------------------------------------------------------------------
 
     public static String join(String channel) {
-        requireParam("channel", channel);
+        requireToken("channel", channel);
         return build(IrcCommand.JOIN + " " + channel);
     }
 
     public static String join(String channel, String key) {
-        requireParam("channel", channel);
-        requireParam("key", key);
+        requireToken("channel", channel);
+        requireToken("key", key);
         return build(IrcCommand.JOIN + " " + channel + " " + key);
     }
 
     public static String part(String channel) {
-        requireParam("channel", channel);
+        requireToken("channel", channel);
         return build(IrcCommand.PART + " " + channel);
     }
 
     public static String part(String channel, String reason) {
-        requireParam("channel", channel);
+        requireToken("channel", channel);
         requireParam("reason", reason);
         return build(IrcCommand.PART + " " + channel + " :" + reason);
     }
 
     public static String kick(String channel, String nick, String reason) {
-        requireParam("channel", channel);
-        requireParam("nick", nick);
+        requireToken("channel", channel);
+        requireToken("nick", nick);
         requireParam("reason", reason);
         return build(IrcCommand.KICK + " " + channel + " " + nick + " :" + reason);
     }
 
     public static String topic(String channel, String topic) {
-        requireParam("channel", channel);
+        requireToken("channel", channel);
         requireParam("topic", topic);
         return build(IrcCommand.TOPIC + " " + channel + " :" + topic);
     }
 
     public static String names(String channel) {
-        requireParam("channel", channel);
+        requireToken("channel", channel);
         return build(IrcCommand.NAMES + " " + channel);
     }
 
@@ -138,11 +138,11 @@ public final class IrcMessages {
 
     /** Arbitrary MODE: channel flags [param...] */
     public static String mode(String target, String flags, String... params) {
-        requireParam("target", target);
-        requireParam("flags", flags);
+        requireToken("target", target);
+        requireToken("flags", flags);
         StringBuilder sb = new StringBuilder(IrcCommand.MODE).append(" ").append(target).append(" ").append(flags);
         for (String p : params) {
-            requireParam("mode param", p);
+            requireToken("mode param", p);
             sb.append(" ").append(p);
         }
         return build(sb.toString());
@@ -200,6 +200,14 @@ public final class IrcMessages {
         if (value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0) {
             throw new IllegalArgumentException(
                     "IRC param '" + name + "' must not contain CR or LF (IRC injection risk)");
+        }
+    }
+
+    /** Like requireParam, but also forbids spaces — for nick/channel tokens that must be a single word. */
+    private static void requireToken(String name, String value) {
+        requireParam(name, value);
+        if (value.indexOf(' ') >= 0) {
+            throw new IllegalArgumentException("IRC param '" + name + "' must not contain spaces");
         }
     }
 }

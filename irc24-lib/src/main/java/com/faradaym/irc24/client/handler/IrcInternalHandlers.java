@@ -1,16 +1,15 @@
 package com.faradaym.irc24.client.handler;
 
+import com.faradaym.irc24.client.IrcClientConfig;
+import com.faradaym.irc24.client.LineWriter;
 import com.faradaym.irc24.parser.IrcMessage;
 import com.faradaym.irc24.protocol.IrcCommand;
 import com.faradaym.irc24.protocol.IrcMessages;
 import com.faradaym.irc24.protocol.IrcReply;
-import com.faradaym.irc24.client.IrcClientConfig;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -27,27 +26,17 @@ import java.util.function.Supplier;
  *     .config(config)
  *     .latch(() -> welcomeLatch)
  *     .joinedChannels(joinedChannels)
- *     .pendingNames(pendingNames)
+ *     .namesTracker(namesTracker)
  *     .build();
  * }</pre>
  */
 public class IrcInternalHandlers {
 
-    /**
-     * Writes a single wire-format line to the connection.
-     * IrcClient supplies: {@code line -> connection.writeLine(line)} —
-     * always reads the current volatile connection, safe after reconnect.
-     */
-    @FunctionalInterface
-    public interface LineWriter {
-        void writeLine(String line) throws IOException;
-    }
-
     private LineWriter writer;
     private AtomicReference<IrcClientConfig> config;
     private Supplier<CountDownLatch> latch;
     private Set<String> joinedChannels;
-    private ConcurrentHashMap<String, PendingNames> pendingNames;
+    private NamesTracker namesTracker;
 
     // -----------------------------------------------------------------------
     // Builder-style setters
@@ -73,8 +62,8 @@ public class IrcInternalHandlers {
         return this;
     }
 
-    public IrcInternalHandlers pendingNames(ConcurrentHashMap<String, PendingNames> pendingNames) {
-        this.pendingNames = pendingNames;
+    public IrcInternalHandlers namesTracker(NamesTracker namesTracker) {
+        this.namesTracker = namesTracker;
         return this;
     }
 
@@ -86,8 +75,8 @@ public class IrcInternalHandlers {
                 IrcCommand.PRIVMSG,      this::onPrivmsg,
                 IrcCommand.JOIN,         this::onJoin,
                 IrcCommand.PART,         this::onPart,
-                IrcReply.RPL_NAMREPLY,   this::onNamreply,
-                IrcReply.RPL_ENDOFNAMES, this::onEndOfNames
+                IrcReply.RPL_NAMREPLY,   namesTracker::onNamreply,
+                IrcReply.RPL_ENDOFNAMES, namesTracker::onEndOfNames
         );
     }
 
@@ -129,31 +118,6 @@ public class IrcInternalHandlers {
     private boolean onPart(IrcMessage msg) {
         String channel = !msg.params().isEmpty() ? msg.params().getFirst() : msg.trailing();
         if (channel != null) joinedChannels.remove(channel);
-        return false;
-    }
-
-    private boolean onNamreply(IrcMessage msg) {
-        if (msg.params().size() >= 2 && msg.trailing() != null) {
-            String channel = msg.params().getLast().toLowerCase();
-            PendingNames pending = pendingNames.get(channel);
-            if (pending != null) {
-                for (String raw : msg.trailing().split(" ")) {
-                    String nick = raw.replaceAll("^[@+%&~!]+", "");
-                    if (!nick.isEmpty()) pending.users().add(nick);
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean onEndOfNames(IrcMessage msg) {
-        if (msg.params().size() >= 2) {
-            String channel = msg.params().get(1).toLowerCase();
-            PendingNames pending = pendingNames.remove(channel);
-            if (pending != null) {
-                pending.future().complete(List.copyOf(pending.users()));
-            }
-        }
         return false;
     }
 

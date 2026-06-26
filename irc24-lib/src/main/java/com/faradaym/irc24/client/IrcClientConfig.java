@@ -29,7 +29,7 @@ public record IrcClientConfig(
     public static IrcClientConfig of(String host, int port, String nick) {
         return new IrcClientConfig(
                 host, port,
-                nick, nick.toLowerCase(), nick,
+                nick, toAsciiUser(nick), nick,
                 Optional.empty(),
                 false,
                 Optional.empty(),
@@ -40,6 +40,12 @@ public record IrcClientConfig(
                 false,
                 "irc24"
         );
+    }
+
+    /** Strips non-ASCII chars from nick to produce a valid IRC username. Falls back to "user" if empty. */
+    private static String toAsciiUser(String nick) {
+        String ascii = nick.toLowerCase().replaceAll("[^a-z0-9._-]", "").replaceFirst("^[^a-z]+", "");
+        return ascii.isEmpty() ? "user" : ascii;
     }
 
     /** For tests — no nick required (loopback FakeServer handles handshake) */

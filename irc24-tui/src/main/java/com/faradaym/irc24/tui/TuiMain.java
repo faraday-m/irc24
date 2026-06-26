@@ -34,11 +34,11 @@ import java.time.Duration;
 public class TuiMain {
 
     public static void main(String[] args) throws Exception {
-        String host    = "irc.libera.chat";
-        int    port    = 6697;
+        String host    = "localhost";
+        int    port    = 6667;
         String nick    = "irc24bot";
-        String channel = "#libera";
-        boolean tls    = true;
+        String channel = "#chat";
+        boolean tls    = false;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {

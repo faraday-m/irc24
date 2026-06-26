@@ -34,4 +34,9 @@ build/
 .vscode/
 
 ### Mac OS ###
-.DS_Storedependency-reduced-pom.xml
+.DS_Store
+dependency-reduced-pom.xml
+
+### Local dev environment ###
+docker-compose.yml
+ergo-config/

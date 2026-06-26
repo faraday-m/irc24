@@ -4,7 +4,7 @@ import com.faradaym.irc24.client.handler.CircuitBreaker;
 import com.faradaym.irc24.client.handler.InternalHandler;
 import com.faradaym.irc24.client.handler.IrcEventHandler;
 import com.faradaym.irc24.client.handler.IrcInternalHandlers;
-import com.faradaym.irc24.client.handler.PendingNames;
+import com.faradaym.irc24.client.handler.NamesTracker;
 import com.faradaym.irc24.connection.IrcConnection;
 import com.faradaym.irc24.parser.IrcMessage;
 import com.faradaym.irc24.parser.IrcMessageParser;
@@ -13,12 +13,17 @@ import com.faradaym.irc24.protocol.IrcMessages;
 import java.io.Closeable;
 import java.io.IOException;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -42,8 +47,7 @@ public class IrcClient implements Closeable {
     private final Set<String> joinedChannels =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    private final ConcurrentHashMap<String, PendingNames> pendingNames =
-            new ConcurrentHashMap<>();
+    private final NamesTracker namesTracker = new NamesTracker();
 
     /** IRC commands — writes via lambda to the current volatile connection */
     private final IrcCommandSender sender;
@@ -54,7 +58,15 @@ public class IrcClient implements Closeable {
     private volatile CountDownLatch welcomeLatch;
     private volatile IrcConnection connection;
     private volatile boolean running;
-    /** false between a connection drop and a successful reconnect — handlers are paused */
+
+    /**
+     * Guards whether incoming messages are forwarded to user handlers.
+     * Set to false when the connection drops, true again once reconnect succeeds.
+     *
+     * There is no message loss in the gap: the connection is dead while this is false,
+     * so no new messages arrive. Messages already offered to handler queues before the
+     * disconnect are processed normally by the handler worker threads.
+     */
     private volatile boolean dispatching = true;
 
     private record HandlerEntry(
@@ -73,7 +85,7 @@ public class IrcClient implements Closeable {
                 .config(this.config)
                 .latch(() -> welcomeLatch)
                 .joinedChannels(joinedChannels)
-                .pendingNames(pendingNames)
+                .namesTracker(namesTracker)
                 .build();
     }
 
@@ -150,15 +162,7 @@ public class IrcClient implements Closeable {
      * Nicks are returned without mode prefixes (@, +, %, etc.).
      */
     public CompletableFuture<List<String>> getUsers(String channel) throws IOException {
-        String key = channel.toLowerCase();
-        CompletableFuture<List<String>> future = new CompletableFuture<>();
-        PendingNames old = pendingNames.put(key, new PendingNames(new ArrayList<>(), future));
-        if (old != null) {
-            old.future().completeExceptionally(
-                    new IllegalStateException("Superseded by a new NAMES request"));
-        }
-        connection.writeLine(IrcMessages.names(channel));
-        return future;
+        return namesTracker.request(channel, line -> connection.writeLine(line));
     }
 
     // -----------------------------------------------------------------------

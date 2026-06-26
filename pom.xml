@@ -13,6 +13,7 @@
     <modules>
         <module>irc24-lib</module>
         <module>irc24-tui</module>
+        <module>irc24-bench</module>
     </modules>
 
     <properties>

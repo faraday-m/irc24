@@ -19,11 +19,43 @@ import java.util.*;
  *  Row H-2:      separator line
  *  Row H-1:      input line
  * </pre>
+ *
+ * Messages are rendered as styled spans: nicks get a consistent color derived
+ * from their name hash, and a small subset of Markdown is rendered inline:
+ *   **bold**   *italic*   `code`
  */
 class TuiRenderer {
 
     private static final int CHAN_W = 16;
     private static final int USER_W = 16;
+
+    // Colors picked for readability on dark terminal backgrounds.
+    private static final TextColor.ANSI[] NICK_COLORS = {
+            TextColor.ANSI.CYAN,
+            TextColor.ANSI.GREEN,
+            TextColor.ANSI.YELLOW,
+            TextColor.ANSI.MAGENTA,
+            TextColor.ANSI.RED_BRIGHT,
+            TextColor.ANSI.GREEN_BRIGHT,
+            TextColor.ANSI.CYAN_BRIGHT,
+            TextColor.ANSI.MAGENTA_BRIGHT,
+    };
+
+    // -----------------------------------------------------------------------
+    // Span — a styled text fragment
+    // -----------------------------------------------------------------------
+
+    private record Span(String text, TextColor color, List<SGR> mods) {
+        static Span plain(String text) {
+            return new Span(text, TextColor.ANSI.DEFAULT, List.of());
+        }
+        static Span colored(String text, TextColor color) {
+            return new Span(text, color, List.of());
+        }
+        static Span styled(String text, TextColor color, SGR... mods) {
+            return new Span(text, color, List.of(mods));
+        }
+    }
 
     private final TuiState state;
     private final Screen   screen;
@@ -42,13 +74,11 @@ class TuiRenderer {
         state.termW = W; state.termH = H;
 
         TextGraphics g = screen.newTextGraphics();
-        // Fill via TextGraphics (not screen.clear()) — modifies back buffer only,
-        // so Lanterna diffs properly and sends only changed cells each frame.
         g.setBackgroundColor(TextColor.ANSI.DEFAULT);
         g.setForegroundColor(TextColor.ANSI.DEFAULT);
         g.fillRectangle(TerminalPosition.TOP_LEFT_CORNER, sz, ' ');
 
-        // ── Status bar ──────────────────────────────────────────────────────
+        // ── Status bar ───────────────────────────────────────────────────────
         g.setBackgroundColor(TextColor.ANSI.BLUE);
         g.setForegroundColor(TextColor.ANSI.WHITE);
         g.enableModifiers(SGR.BOLD);
@@ -99,7 +129,7 @@ class TuiRenderer {
             g.setForegroundColor(TextColor.ANSI.DEFAULT);
         }
         for (int i = offset; i < channels.size() && (i - offset) < chanRows; i++) {
-            String ch     = channels.get(i);
+            String ch      = channels.get(i);
             boolean active = ch.equals(state.activeChannel);
             g.setForegroundColor(active ? TextColor.ANSI.GREEN : TextColor.ANSI.DEFAULT);
             if (active) g.enableModifiers(SGR.BOLD);
@@ -135,8 +165,7 @@ class TuiRenderer {
         for (int i = startIdx; i < endIdx && i < wrapped.size(); i++) {
             int row = 2 + (i - startIdx);
             if (row >= H - 2) break;
-            g.setForegroundColor(TextColor.ANSI.DEFAULT);
-            g.putString(msgX, row, cut(wrapped.get(i), msgW));
+            renderLine(g, msgX, row, parseSpans(wrapped.get(i), state.myNick), msgW);
         }
     }
 
@@ -146,13 +175,119 @@ class TuiRenderer {
         List<String> ul       = state.chanUsers.getOrDefault(state.activeChannel, List.of());
         int          userRows = contentH - 1;
         drawHeader(g, userX, 1, "Users (" + ul.size() + ")", USER_W);
-        for (int i = 0; i < ul.size() && i < userRows; i++)
-            g.putString(userX, 2 + i, cut(ul.get(i), USER_W));
+        for (int i = 0; i < ul.size() && i < userRows; i++) {
+            String raw       = ul.get(i);
+            String cleanNick = raw.replaceAll("^[@+%&~!]+", "");
+            g.setForegroundColor(nickColor(cleanNick));
+            g.putString(userX, 2 + i, cut(raw, USER_W));
+            g.setForegroundColor(TextColor.ANSI.DEFAULT);
+        }
         if (ul.size() > userRows) {
             g.setForegroundColor(TextColor.ANSI.YELLOW);
             g.putString(userX, 1 + userRows, cut("+" + (ul.size() - userRows) + " more", USER_W));
             g.setForegroundColor(TextColor.ANSI.DEFAULT);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Styled rendering
+    // -----------------------------------------------------------------------
+
+    /** Assigns a stable color to a nick based on its hash. */
+    static TextColor.ANSI nickColor(String nick) {
+        return NICK_COLORS[Math.abs(nick.hashCode()) % NICK_COLORS.length];
+    }
+
+    /**
+     * Parses a stored message line into styled spans.
+     *
+     * Recognises:
+     *   "<nick> text"  — nick colored + bold, body parsed for Markdown
+     *   "*** text"     — system notice in yellow
+     *   anything else  — Markdown only
+     */
+    static List<Span> parseSpans(String line, String myNick) {
+        if (line.startsWith("<")) {
+            int close = line.indexOf('>');
+            if (close > 1) {
+                String nick  = line.substring(1, close);
+                TextColor fg = nick.equalsIgnoreCase(myNick)
+                        ? TextColor.ANSI.WHITE_BRIGHT
+                        : nickColor(nick);
+                List<Span> spans = new ArrayList<>();
+                spans.add(Span.styled("<" + nick + ">", fg, SGR.BOLD));
+                spans.addAll(parseMarkdown(line.substring(close + 1)));
+                return spans;
+            }
+        }
+        if (line.startsWith("*** ")) {
+            return List.of(Span.colored(line, TextColor.ANSI.YELLOW));
+        }
+        return parseMarkdown(line);
+    }
+
+    /**
+     * Tokenises text into spans using a simple Markdown subset:
+     *   **bold**   *italic*   `code`
+     *
+     * Markers are consumed (not included in span text).
+     * Unclosed markers are treated as literal text.
+     */
+    static List<Span> parseMarkdown(String text) {
+        List<Span> spans = new ArrayList<>();
+        StringBuilder buf = new StringBuilder();
+        boolean bold = false, italic = false, code = false;
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            if (!code && c == '*' && i + 1 < text.length() && text.charAt(i + 1) == '*') {
+                flush(spans, buf, bold, italic, false);
+                bold = !bold;
+                i += 2;
+            } else if (!code && c == '*') {
+                flush(spans, buf, bold, italic, false);
+                italic = !italic;
+                i++;
+            } else if (c == '`') {
+                flush(spans, buf, bold, italic, code);
+                code = !code;
+                i++;
+            } else {
+                buf.append(c);
+                i++;
+            }
+        }
+        flush(spans, buf, bold, italic, code);
+        return spans;
+    }
+
+    private static void flush(List<Span> spans, StringBuilder buf, boolean bold, boolean italic, boolean code) {
+        if (buf.isEmpty()) return;
+        String text = buf.toString();
+        buf.setLength(0);
+        if (code) {
+            spans.add(Span.colored(text, TextColor.ANSI.CYAN));
+            return;
+        }
+        List<SGR> mods = new ArrayList<>(2);
+        if (bold)   mods.add(SGR.BOLD);
+        if (italic) mods.add(SGR.ITALIC);
+        spans.add(new Span(text, TextColor.ANSI.DEFAULT, mods));
+    }
+
+    /** Renders a list of spans at (x, y), clipped to maxW columns. */
+    private void renderLine(TextGraphics g, int x, int y, List<Span> spans, int maxW) {
+        int used = 0;
+        for (Span span : spans) {
+            if (used >= maxW) break;
+            String text = cut(span.text(), maxW - used);
+            g.setForegroundColor(span.color());
+            if (!span.mods().isEmpty()) g.enableModifiers(span.mods().toArray(new SGR[0]));
+            g.putString(x + used, y, text);
+            if (!span.mods().isEmpty()) g.disableModifiers(span.mods().toArray(new SGR[0]));
+            used += text.length();
+        }
+        g.setForegroundColor(TextColor.ANSI.DEFAULT);
     }
 
     private void drawHeader(TextGraphics g, int x, int row, String title, int width) {
@@ -167,15 +302,62 @@ class TuiRenderer {
     // Static utilities (package-visible — also used by IrcTui.scrollMsg)
     // -----------------------------------------------------------------------
 
+    /**
+     * Wraps a list of raw message strings to fit within {@code width} visible columns.
+     * Markdown markers (**,  *, `) are invisible and excluded from the width count.
+     */
     static List<String> wrapAll(List<String> lines, int width) {
         if (width <= 0) return lines;
         List<String> out = new ArrayList<>();
         for (String line : lines) {
-            if (line.length() <= width) { out.add(line); continue; }
-            for (int i = 0; i < line.length(); i += width)
-                out.add(line.substring(i, Math.min(i + width, line.length())));
+            if (visibleLen(line) <= width) { out.add(line); continue; }
+            int i = 0;
+            boolean inCode = false;
+            while (i < line.length()) {
+                int visible = 0;
+                boolean ic  = inCode;
+                int j = i;
+                while (j < line.length() && visible < width) {
+                    char c = line.charAt(j);
+                    if (!ic && c == '*' && j + 1 < line.length() && line.charAt(j + 1) == '*') {
+                        j += 2;
+                    } else if (!ic && c == '*') {
+                        j++;
+                    } else if (c == '`') {
+                        ic = !ic;
+                        j++;
+                    } else {
+                        visible++;
+                        j++;
+                    }
+                }
+                out.add(line.substring(i, j));
+                inCode = ic;
+                i = j;
+            }
         }
         return out;
+    }
+
+    /** Visible column count of a string: marker characters (**,  *, `) are excluded. */
+    static int visibleLen(String s) {
+        boolean inCode = false;
+        int len = 0, i = 0;
+        while (i < s.length()) {
+            char c = s.charAt(i);
+            if (!inCode && c == '*' && i + 1 < s.length() && s.charAt(i + 1) == '*') {
+                i += 2;
+            } else if (!inCode && c == '*') {
+                i++;
+            } else if (c == '`') {
+                inCode = !inCode;
+                i++;
+            } else {
+                len++;
+                i++;
+            }
+        }
+        return len;
     }
 
     static String cut(String s, int max) {
